@@ -6,17 +6,14 @@
 
 ### 1. 用例管理
 - 按 `function_id` 和 `function_version` 注册用例
-- 静态配置功能全集，运行时自动注册执行用例
-- 自动对比测试全集与实际执行用例，确保不重不漏
-- 提供覆盖率统计和报告
+- 从飞机拉取功能全集，运行时自动注册执行用例，二者对比确保CTS不重不漏
 
-### 2. 二次校验
-- 每个用例执行后支持 `PostCheck()` 二次校验
-- 不仅仅是执行过程中的断言，还能在测试完成后进行额外检查
-- 支持 `SetTestResult()`/`GetTestResult()` 在测试和校验间传递数据
+### 2. 二次校验与自动PreCheck/PostCheck
+- 一个function_id:version对应一组PreCheck和PostCheck函数
+- 每个用例执行前支持`PreCheck()`, 执行后支持 `PostCheck()`
+- 基于测试名称自动选择和执行对应的PreCheck/PostCheck函数
 
 ### 3. 超时检查
-- 支持 `CTS_TEST_WITH_TIMEOUT` 和 `CTS_TEST_F_WITH_TIMEOUT`
 - 使用线程+future机制实现安全超时检测
 - 超时后继续执行后续用例，不影响整体测试流程
 
@@ -26,24 +23,25 @@
 ```cpp
 // 简单测试用例
 CTS_TEST(test_suite_name, test_name, function_id, function_version) {
-    // 测试代码
 }
 
 // 基于fixture的测试用例
 CTS_TEST_F(test_fixture, test_name, function_id, function_version) {
-    // 测试代码
+}
+
+// 带自动PreCheck/PostCheck的测试用例
+CTS_TEST_F_WITH_POSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) {
 }
 
 // 带超时的测试用例
 CTS_TEST_WITH_TIMEOUT(test_suite_name, test_name, function_id, function_version, timeout_ms) {
-    // 测试代码
 }
-
-// 带超时的fixture测试用例
 CTS_TEST_F_WITH_TIMEOUT(test_fixture, test_name, function_id, function_version, timeout_ms) {
-    // 测试代码
+}
+CTS_TEST_F_WITH_POSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) {
 }
 ```
+
 
 ## 使用示例
 
@@ -55,34 +53,38 @@ CTS_TEST(BasicMath, Addition, "MATH_ADD", "v1.0") {
 }
 ```
 
-### 2. 带二次校验的测试
+### 2. 自动PreCheck/PostCheck测试
 ```cpp
-class MyFixture : public CTSBase {
+// 1. 定义功能CTS测试类
+class CalculationFixture : public ::testing::Test {
 protected:
-    void PostCheck() override {
-        std::string result = GetTestResult("calculation_result");
-        if (!result.empty()) {
-            int value = std::stoi(result);
-            EXPECT_GT(value, 0) << "Result should be positive";
-        }
+    void SetUp() override {
+        // 自动执行对应的PreCheck
+        CTSBase::ExecutePreCheckForCurrentTest();
+    }
+
+    void TearDown() override {
+        // 自动执行对应的PostCheck
+        CTSBase::ExecutePostCheckForCurrentTest();
     }
 };
 
-CTS_TEST_F(MyFixture, Calculation, "MATH_CALC", "v1.0") {
-    int result = 10 * 5;
-    EXPECT_EQ(result, 50);
-    SetTestResult("calculation_result", std::to_string(result));
+// 2. 定义pre/post检查函数
+void calculation_precheck() {
+    std::cout << "PreCheck: Initializing calculation environment..." << std::endl;
+}
+
+void calculation_postcheck() {
+    std::cout << "PostCheck: Verifying calculation results..." << std::endl;
+}
+
+// 3. 使用宏定义测试用例（自动建立映射关系）
+CTS_TEST_F_WITH_POSTCHECK(CalculationFixture, CalculationTest, "CALC", "1.0", calculation_precheck, calculation_postcheck) {
+    int result = 5 + 10;
+    EXPECT_EQ(result, 15);
+    std::cout << "Test: Sum calculated = " << result << std::endl;
 }
 ```
-
-### 3. 超时测试
-```cpp
-CTS_TEST_WITH_TIMEOUT(SlowTest, LongOperation, "SLOW_OP", "v1.0", 2000) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    EXPECT_TRUE(true);
-}
-```
-
 
 
 ## 主程序 & 功能配置

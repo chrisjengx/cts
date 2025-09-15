@@ -20,11 +20,25 @@
 struct CTSFunctionInfo {
     std::string function_id;
     std::string function_version;
+
+    // PreCheck 和 PostCheck 函数, 用于测试前检查和结果校验
+    std::function<void()> pre_check_func;   // PreCheck 函数
+    std::function<void()> post_check_func;  // PostCheck 函数
     
+    // 默认构造函数
+    CTSFunctionInfo() : function_id(""), function_version(""), pre_check_func(nullptr), post_check_func(nullptr) {}
+    
+    // 构造函数
+    CTSFunctionInfo(const std::string& id, const std::string& version) 
+        : function_id(id), function_version(version), pre_check_func(nullptr), post_check_func(nullptr) {}
+    
+    CTSFunctionInfo(const std::string& id, const std::string& version, std::function<void()> pre_check, std::function<void()> post_check) 
+        : function_id(id), function_version(version), pre_check_func(pre_check), post_check_func(post_check) {}
+
     bool operator==(const CTSFunctionInfo& other) const {
         return function_id == other.function_id && function_version == other.function_version;
     }
-    
+
     std::string to_string() const {
         return function_id + ":" + function_version;
     }
@@ -43,51 +57,21 @@ namespace std {
 // CTS 基类
 class CTSBase : public ::testing::Test {
 protected:
-    static std::unordered_set<CTSFunctionInfo> registered_cases;
-    static std::unordered_set<CTSFunctionInfo> all_functions;
+    static std::unordered_set<CTSFunctionInfo> all_functions;           // pull from UAV
+    static std::unordered_map<std::string, CTSFunctionInfo> registered_functions;  // 测试名称到功能信息的映射
     static std::mutex mtx;
-    static std::unordered_map<std::string, std::string> test_results; // 存储测试结果用于二次校验
-
 public:
     // 注册用例
-    static void RegisterCase(const CTSFunctionInfo& info) {
+    static void RegisterCase(const std::string& test_suite, const std::string& test_name, const CTSFunctionInfo& info) {
         std::lock_guard<std::mutex> lock(mtx);
-        registered_cases.insert(info);
+        std::string full_test_name = test_suite + "." + test_name;
+        registered_functions[full_test_name] = info;
     }
 
     // 静态注册功能全集 - 需要在main()开始时调用
     static void RegisterAllFunctions(const std::unordered_set<CTSFunctionInfo>& all) {
         std::lock_guard<std::mutex> lock(mtx);
         all_functions = all;
-    }
-
-    // 设置测试结果（供二次校验使用）
-    void SetTestResult(const std::string& key, const std::string& value) {
-        std::lock_guard<std::mutex> lock(mtx);
-        test_results[key] = value;
-    }
-
-    // 获取测试结果（供二次校验使用）
-    std::string GetTestResult(const std::string& key) {
-        std::lock_guard<std::mutex> lock(mtx);
-        auto it = test_results.find(key);
-        return (it != test_results.end()) ? it->second : "";
-    }
-
-    // 用于二次校验 - 用户可以重写此方法
-    virtual void PostCheck() {
-        // 默认实现为空，用户可以重写进行自定义二次校验
-    }
-
-    // Google Test的TearDown，会自动调用PostCheck进行二次校验
-    void TearDown() override {
-        try {
-            PostCheck();
-        } catch (const std::exception& e) {
-            ADD_FAILURE() << "PostCheck failed with exception: " << e.what();
-        } catch (...) {
-            ADD_FAILURE() << "PostCheck failed with unknown exception";
-        }
     }
 
     // 安全的超时执行函数 - 使用线程+future实现
@@ -122,17 +106,65 @@ public:
         }
     }
 
+    // 自动根据当前测试执行PreCheck
+    static void ExecutePreCheckForCurrentTest() {
+        std::string test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+        std::string suite_name = ::testing::UnitTest::GetInstance()->current_test_info()->test_case_name();
+        std::string full_test_name = suite_name + "." + test_name;
+        
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = registered_functions.find(full_test_name);
+        if (it != registered_functions.end() && it->second.pre_check_func) {
+            std::cout << "Executing PreCheck for " << it->second.function_id << ":" << it->second.function_version << std::endl;
+            try {
+                it->second.pre_check_func();
+            } catch (const std::exception& e) {
+                ADD_FAILURE() << "PreCheck failed with exception: " << e.what();
+            } catch (...) {
+                ADD_FAILURE() << "PreCheck failed with unknown exception";
+            }
+        }
+    }
+
+    // 自动根据当前测试执行PostCheck
+    static void ExecutePostCheckForCurrentTest() {
+        std::string test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+        std::string suite_name = ::testing::UnitTest::GetInstance()->current_test_info()->test_case_name();
+        std::string full_test_name = suite_name + "." + test_name;
+        
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = registered_functions.find(full_test_name);
+        if (it != registered_functions.end() && it->second.post_check_func) {
+            std::cout << "Executing PostCheck for " << it->second.function_id << ":" << it->second.function_version << std::endl;
+            try {
+                it->second.post_check_func();
+            } catch (const std::exception& e) {
+                ADD_FAILURE() << "PostCheck failed with exception: " << e.what();
+            } catch (...) {
+                ADD_FAILURE() << "PostCheck failed with unknown exception";
+            }
+        }
+    }
+
     // 用于输出未覆盖的功能和统计信息
+    // TBD 放到Manager实现
     static void ReportUncovered() {
         std::lock_guard<std::mutex> lock(mtx);
+        
+        // 收集已注册的功能信息
+        std::unordered_set<CTSFunctionInfo> registered_function_infos;
+        for (const auto& pair : registered_functions) {
+            registered_function_infos.insert(pair.second);
+        }
+        
         std::cout << "\n=== CTS Coverage Report ===" << std::endl;
         std::cout << "Total functions defined: " << all_functions.size() << std::endl;
-        std::cout << "Test cases registered: " << registered_cases.size() << std::endl;
+        std::cout << "Test cases registered: " << registered_function_infos.size() << std::endl;
         
         // 查找未覆盖的功能
         std::vector<CTSFunctionInfo> uncovered;
         for (const auto& func : all_functions) {
-            if (registered_cases.find(func) == registered_cases.end()) {
+            if (registered_function_infos.find(func) == registered_function_infos.end()) {
                 uncovered.push_back(func);
             }
         }
@@ -148,7 +180,7 @@ public:
         
         // 查找重复注册的功能
         std::unordered_map<CTSFunctionInfo, int> count_map;
-        for (const auto& func : registered_cases) {
+        for (const auto& func : registered_function_infos) {
             count_map[func]++;
         }
         
@@ -172,9 +204,15 @@ public:
         std::lock_guard<std::mutex> lock(mtx);
         if (all_functions.empty()) return 0.0;
         
+        // 收集已注册的功能信息
+        std::unordered_set<CTSFunctionInfo> registered_function_infos;
+        for (const auto& pair : registered_functions) {
+            registered_function_infos.insert(pair.second);
+        }
+        
         int covered = 0;
         for (const auto& func : all_functions) {
-            if (registered_cases.find(func) != registered_cases.end()) {
+            if (registered_function_infos.find(func) != registered_function_infos.end()) {
                 covered++;
             }
         }
@@ -183,39 +221,49 @@ public:
 };
 
 // 静态成员定义
-std::unordered_set<CTSFunctionInfo> CTSBase::registered_cases;
+std::unordered_map<std::string, CTSFunctionInfo> CTSBase::registered_functions;
 std::unordered_set<CTSFunctionInfo> CTSBase::all_functions;
-std::unordered_map<std::string, std::string> CTSBase::test_results;
 std::mutex CTSBase::mtx;
 
-// CTS_TEST - 不依赖fixture的简单测试用例
+// CTS_TEST
 #define CTS_TEST(test_suite_name, test_name, function_id, function_version) \
 class CTS_REGISTER_##test_suite_name##_##test_name { \
 public: \
     CTS_REGISTER_##test_suite_name##_##test_name() { \
-        CTSBase::RegisterCase({function_id, function_version}); \
+        CTSBase::RegisterCase(#test_suite_name, #test_name, {function_id, function_version}); \
     } \
 }; \
 static CTS_REGISTER_##test_suite_name##_##test_name cts_register_##test_suite_name##_##test_name; \
 TEST(test_suite_name, test_name)
 
-// CTS_TEST_F - 基于fixture的测试用例
+// CTS_TEST_F
 #define CTS_TEST_F(test_fixture, test_name, function_id, function_version) \
 class CTS_REGISTER_##test_fixture##_##test_name { \
 public: \
     CTS_REGISTER_##test_fixture##_##test_name() { \
-        CTSBase::RegisterCase({function_id, function_version}); \
+        CTSBase::RegisterCase(#test_fixture, #test_name, {function_id, function_version}); \
     } \
 }; \
 static CTS_REGISTER_##test_fixture##_##test_name cts_register_##test_fixture##_##test_name; \
 TEST_F(test_fixture, test_name)
 
-// CTS_TEST_WITH_TIMEOUT - 不依赖fixture的超时测试用例
+// CTS_TEST_F_WITH_POSTCHECK
+#define CTS_TEST_F_WITH_POSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) \
+class CTS_REGISTER_##test_fixture##_##test_name { \
+public: \
+    CTS_REGISTER_##test_fixture##_##test_name() { \
+        CTSBase::RegisterCase(#test_fixture, #test_name, {function_id, function_version, pre_check, post_check}); \
+    } \
+}; \
+static CTS_REGISTER_##test_fixture##_##test_name cts_register_##test_fixture##_##test_name; \
+TEST_F(test_fixture, test_name)
+
+// CTS_TEST_WITH_TIMEOUT
 #define CTS_TEST_WITH_TIMEOUT(test_suite_name, test_name, function_id, function_version, timeout_ms) \
 class CTS_REGISTER_##test_suite_name##_##test_name##_TIMEOUT { \
 public: \
     CTS_REGISTER_##test_suite_name##_##test_name##_TIMEOUT() { \
-        CTSBase::RegisterCase({function_id, function_version}); \
+        CTSBase::RegisterCase(#test_suite_name, #test_name, {function_id, function_version}); \
     } \
 }; \
 static CTS_REGISTER_##test_suite_name##_##test_name##_TIMEOUT cts_register_##test_suite_name##_##test_name##_timeout; \
@@ -232,49 +280,50 @@ protected: \
 TEST_F(CTS_TIMEOUT_TEST_##test_suite_name##_##test_name, test_name) {} \
 void CTS_TIMEOUT_TEST_##test_suite_name##_##test_name::TimeoutTestBody()
 
-// CTS_TEST_F_WITH_TIMEOUT - 基于fixture的超时测试用例
+// CTS_TEST_F_WITH_TIMEOUT
 #define CTS_TEST_F_WITH_TIMEOUT(test_fixture, test_name, function_id, function_version, timeout_ms) \
 class CTS_REGISTER_##test_fixture##_##test_name##_TIMEOUT { \
 public: \
     CTS_REGISTER_##test_fixture##_##test_name##_TIMEOUT() { \
-        CTSBase::RegisterCase({function_id, function_version}); \
+        CTSBase::RegisterCase(#test_fixture, #test_name, {function_id, function_version}); \
     } \
 }; \
 static CTS_REGISTER_##test_fixture##_##test_name##_TIMEOUT cts_register_##test_fixture##_##test_name##_timeout; \
-class CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name : public test_fixture { \
+class CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name : public ::testing::Test { \
 protected: \
     void TestBody() override { \
-        std::atomic<bool> finished{false}; \
-        std::exception_ptr test_exception = nullptr; \
-        \
-        std::thread test_thread([this, &finished, &test_exception]() { \
-            try { \
-                this->TimeoutTestBody(); \
-                finished = true; \
-            } catch (...) { \
-                test_exception = std::current_exception(); \
-                finished = true; \
-            } \
-        }); \
-        \
-        auto start = std::chrono::steady_clock::now(); \
-        while (!finished && std::chrono::steady_clock::now() - start < std::chrono::milliseconds(timeout_ms)) { \
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); \
-        } \
-        \
-        if (!finished) { \
-            test_thread.detach(); \
-            FAIL() << "Test timed out after " << timeout_ms << " ms (Note: thread detached, may leak resources)"; \
-        } else { \
-            test_thread.join(); \
-            if (test_exception) { \
-                std::rethrow_exception(test_exception); \
-            } \
-        } \
+        bool success = CTSBase::ExecuteWithTimeout([this]() { \
+            this->TimeoutTestBody(); \
+        }, timeout_ms); \
+        ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
     } \
     virtual void TimeoutTestBody(); \
 }; \
 TEST_F(CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name, test_name) {} \
 void CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name::TimeoutTestBody()
+
+//CTS_TEST_F_WITH_POSTCHECK_TIMEOUT
+#define CTS_TEST_F_WITH_POSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) \
+class CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT { \
+public: \
+    CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT() { \
+        CTSBase::RegisterCase(#test_fixture, #test_name, {function_id, function_version, pre_check, post_check}); \
+    } \
+}; \
+static CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT cts_register_##test_fixture##_##test_name##_postcheck_timeout; \
+class CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name : public ::testing::Test { \
+protected: \
+    void TestBody() override { \
+        bool success = CTSBase::ExecuteWithTimeout([this]() { \
+            this->TimeoutTestBody(); \
+        }, timeout_ms); \
+        ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
+        if (post_check) post_check(); \
+    } \
+    virtual void TimeoutTestBody(); \
+}; \
+TEST_F(CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name, test_name) {} \
+void CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name::TimeoutTestBody()
+
 
 #endif // CTS_FRAMEWORK_H
