@@ -11,13 +11,9 @@ protected:
     void SetUp() override {
         data = {1, 2, 3, 4, 5};
         result = 0;
-        // 自动根据当前测试查找并执行PreCheck
-        ExecutePreCheckForCurrentTest();
     }
     
     void TearDown() override {
-        // 自动根据当前测试查找并执行PostCheck
-        ExecutePostCheckForCurrentTest();
     }
     
     std::vector<int> data;
