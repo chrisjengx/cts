@@ -10,7 +10,6 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
-#include <atomic>
 #include <future>
 #include <exception>
 #include <vector>
@@ -147,7 +146,6 @@ public:
     }
 
     // 用于输出未覆盖的功能和统计信息
-    // TBD 放到Manager实现
     static void ReportUncovered() {
         std::lock_guard<std::mutex> lock(mtx);
         
@@ -198,26 +196,6 @@ public:
         std::cout << "\nCoverage: " << std::fixed << std::setprecision(1) << coverage << "%" << std::endl;
         std::cout << "=========================" << std::endl;
     }
-
-    // 获取覆盖率统计
-    static double GetCoveragePercentage() {
-        std::lock_guard<std::mutex> lock(mtx);
-        if (all_functions.empty()) return 0.0;
-        
-        // 收集已注册的功能信息
-        std::unordered_set<CTSFunctionInfo> registered_function_infos;
-        for (const auto& pair : registered_functions) {
-            registered_function_infos.insert(pair.second);
-        }
-        
-        int covered = 0;
-        for (const auto& func : all_functions) {
-            if (registered_function_infos.find(func) != registered_function_infos.end()) {
-                covered++;
-            }
-        }
-        return (double)covered / all_functions.size() * 100.0;
-    }
 };
 
 // 静态成员定义
@@ -247,8 +225,8 @@ public: \
 static CTS_REGISTER_##test_fixture##_##test_name cts_register_##test_fixture##_##test_name; \
 TEST_F(test_fixture, test_name)
 
-// CTS_TEST_F_WITH_POSTCHECK
-#define CTS_TEST_F_WITH_POSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) \
+// CTS_TEST_F_WITH_PREPOSTCHECK
+#define CTS_TEST_F_WITH_PREPOSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) \
 class CTS_REGISTER_##test_fixture##_##test_name { \
 public: \
     CTS_REGISTER_##test_fixture##_##test_name() { \
@@ -267,18 +245,14 @@ public: \
     } \
 }; \
 static CTS_REGISTER_##test_suite_name##_##test_name##_TIMEOUT cts_register_##test_suite_name##_##test_name##_timeout; \
-class CTS_TIMEOUT_TEST_##test_suite_name##_##test_name : public ::testing::Test { \
-protected: \
-    void TestBody() override { \
-        bool success = CTSBase::ExecuteWithTimeout([this]() { \
-            this->TimeoutTestBody(); \
-        }, timeout_ms); \
-        ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
-    } \
-    virtual void TimeoutTestBody(); \
-}; \
-TEST_F(CTS_TIMEOUT_TEST_##test_suite_name##_##test_name, test_name) {} \
-void CTS_TIMEOUT_TEST_##test_suite_name##_##test_name::TimeoutTestBody()
+void test_suite_name##_##test_name##_timeout_wrapper(); \
+TEST(test_suite_name, test_name) { \
+    bool success = CTSBase::ExecuteWithTimeout([]() { \
+        test_suite_name##_##test_name##_timeout_wrapper(); \
+    }, timeout_ms); \
+    ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
+} \
+void test_suite_name##_##test_name##_timeout_wrapper()
 
 // CTS_TEST_F_WITH_TIMEOUT
 #define CTS_TEST_F_WITH_TIMEOUT(test_fixture, test_name, function_id, function_version, timeout_ms) \
@@ -289,41 +263,34 @@ public: \
     } \
 }; \
 static CTS_REGISTER_##test_fixture##_##test_name##_TIMEOUT cts_register_##test_fixture##_##test_name##_timeout; \
-class CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name : public ::testing::Test { \
-protected: \
-    void TestBody() override { \
-        bool success = CTSBase::ExecuteWithTimeout([this]() { \
-            this->TimeoutTestBody(); \
-        }, timeout_ms); \
-        ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
-    } \
-    virtual void TimeoutTestBody(); \
-}; \
-TEST_F(CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name, test_name) {} \
-void CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name::TimeoutTestBody()
+void test_fixture##_##test_name##_timeout_wrapper(); \
+TEST_F(test_fixture, test_name) { \
+    bool success = CTSBase::ExecuteWithTimeout([]() { \
+        test_fixture##_##test_name##_timeout_wrapper(); \
+    }, timeout_ms); \
+    ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
+} \
+void test_fixture##_##test_name##_timeout_wrapper()
 
-//CTS_TEST_F_WITH_POSTCHECK_TIMEOUT
-#define CTS_TEST_F_WITH_POSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) \
-class CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT { \
+//CTS_TEST_F_WITH_PREPOSTCHECK_TIMEOUT
+#define CTS_TEST_F_WITH_PREPOSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) \
+class CTS_REGISTER_##test_fixture##_##test_name##_PREPOSTCHECK_TIMEOUT { \
 public: \
-    CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT() { \
+    CTS_REGISTER_##test_fixture##_##test_name##_PREPOSTCHECK_TIMEOUT() { \
         CTSBase::RegisterCase(#test_fixture, #test_name, {function_id, function_version, pre_check, post_check}); \
     } \
 }; \
-static CTS_REGISTER_##test_fixture##_##test_name##_POSTCHECK_TIMEOUT cts_register_##test_fixture##_##test_name##_postcheck_timeout; \
-class CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name : public ::testing::Test { \
-protected: \
-    void TestBody() override { \
-        bool success = CTSBase::ExecuteWithTimeout([this]() { \
-            this->TimeoutTestBody(); \
-        }, timeout_ms); \
-        ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
-        if (post_check) post_check(); \
-    } \
-    virtual void TimeoutTestBody(); \
-}; \
-TEST_F(CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name, test_name) {} \
-void CTS_TIMEOUT_TEST_F_##test_fixture##_##test_name::TimeoutTestBody()
+static CTS_REGISTER_##test_fixture##_##test_name##_PREPOSTCHECK_TIMEOUT cts_register_##test_fixture##_##test_name##_prepostcheck_timeout; \
+void test_fixture##_##test_name##_prepostcheck_timeout_wrapper(); \
+TEST_F(test_fixture, test_name) { \
+    CTSBase::ExecutePreCheckForCurrentTest(); \
+    bool success = CTSBase::ExecuteWithTimeout([]() { \
+        test_fixture##_##test_name##_prepostcheck_timeout_wrapper(); \
+    }, timeout_ms); \
+    ASSERT_TRUE(success) << "Test failed or timed out after " << timeout_ms << " ms"; \
+    CTSBase::ExecutePostCheckForCurrentTest(); \
+} \
+void test_fixture##_##test_name##_prepostcheck_timeout_wrapper()
 
 
 #endif // CTS_FRAMEWORK_H

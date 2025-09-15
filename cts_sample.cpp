@@ -30,13 +30,9 @@ protected:
     void SetUp() override {
         connection_status = false;
         response_time = 0;
-        // 自动根据当前测试查找并执行PreCheck
-        ExecutePreCheckForCurrentTest();
     }
     
     void TearDown() override {
-        // 自动根据当前测试查找并执行PostCheck
-        ExecutePostCheckForCurrentTest();
     }
     
     bool connection_status;
@@ -77,13 +73,13 @@ void PostCheckBadConnection() {
 }
 
 // 测试用例
-CTS_TEST_F_WITH_POSTCHECK(CalculationFixture, CalculationTest, "CALC", "1.0", PreCheckCalculation, PostCheckCalculation) {
+CTS_TEST_F_WITH_PREPOSTCHECK(CalculationFixture, CalculationTest, "CALC", "1.0", PreCheckCalculation, PostCheckCalculation) {
     result = std::accumulate(data.begin(), data.end(), 0);
     EXPECT_EQ(result, 15);
     std::cout << "Test: Sum calculated = " << result << std::endl;
 }
 
-CTS_TEST_F_WITH_POSTCHECK(NetworkFixture, GoodConnection, "NET", "1.0", nullptr, PostCheckGoodConnection) {
+CTS_TEST_F_WITH_PREPOSTCHECK(NetworkFixture, GoodConnection, "NET", "1.0", nullptr, PostCheckGoodConnection) {
     connection_status = true;
     response_time = 100;
     EXPECT_TRUE(connection_status);
@@ -91,7 +87,7 @@ CTS_TEST_F_WITH_POSTCHECK(NetworkFixture, GoodConnection, "NET", "1.0", nullptr,
     std::cout << "Test: Good connection established, response time: " << response_time << "ms" << std::endl;
 }
 
-CTS_TEST_F_WITH_POSTCHECK(NetworkFixture, BadConnection, "NET", "1.1", nullptr, PostCheckBadConnection) {
+CTS_TEST_F_WITH_PREPOSTCHECK(NetworkFixture, BadConnection, "NET", "1.1", nullptr, PostCheckBadConnection) {
     connection_status = false;
     response_time = 5000;
     EXPECT_FALSE(connection_status);
@@ -105,8 +101,8 @@ CTS_TEST_F(SampleFixture, SimpleTest, "SIMPLE", "1.0") {
     std::cout << "Test: Array size = " << result << std::endl;
 }
 
-CTS_TEST_WITH_TIMEOUT(TimeoutTest, QuickTest, "TIMEOUT", "1.0", 1000) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+CTS_TEST_WITH_TIMEOUT(TimeoutTest, QuickTest, "TIMEOUT", "1.0", 3000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     EXPECT_TRUE(true);
     std::cout << "Quick test completed" << std::endl;
 }
