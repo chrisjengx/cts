@@ -30,7 +30,7 @@ CTS_TEST_F(test_fixture, test_name, function_id, function_version) {
 }
 
 // 带自动PreCheck/PostCheck的测试用例
-CTS_TEST_F_WITH_POSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) {
+CTS_TEST_F_WITH_PREPOSTCHECK(test_fixture, test_name, function_id, function_version, pre_check, post_check) {
 }
 
 // 带超时的测试用例
@@ -38,7 +38,7 @@ CTS_TEST_WITH_TIMEOUT(test_suite_name, test_name, function_id, function_version,
 }
 CTS_TEST_F_WITH_TIMEOUT(test_fixture, test_name, function_id, function_version, timeout_ms) {
 }
-CTS_TEST_F_WITH_POSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) {
+CTS_TEST_F_WITH_PREPOSTCHECK_TIMEOUT(test_fixture, test_name, function_id, function_version, pre_check, post_check, timeout_ms) {
 }
 ```
 
@@ -59,13 +59,9 @@ CTS_TEST(BasicMath, Addition, "MATH_ADD", "v1.0") {
 class CalculationFixture : public ::testing::Test {
 protected:
     void SetUp() override {
-        // 自动执行对应的PreCheck
-        CTSBase::ExecutePreCheckForCurrentTest();
     }
 
     void TearDown() override {
-        // 自动执行对应的PostCheck
-        CTSBase::ExecutePostCheckForCurrentTest();
     }
 };
 
